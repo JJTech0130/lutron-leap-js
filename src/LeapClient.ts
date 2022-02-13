@@ -42,7 +42,7 @@ export class LeapClient extends (EventEmitter as new () => TypedEmitter<LeapClie
 
     private responseParser: ResponseParser;
 
-    constructor(private readonly host: string, private readonly port: number, ca: string, key: string, cert: string) {
+    constructor(private readonly host: string, private readonly port: number, ca: string | undefined, key: string | undefined, cert: string | undefined) {
         super();
         logDebug('new LeapClient being constructed');
         this.connected = null;

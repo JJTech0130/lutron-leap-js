@@ -9,6 +9,7 @@ import TypedEmitter from 'typed-emitter';
 
 import { SmartBridge, LEAP_PORT } from './SmartBridge';
 import { LeapClient } from './LeapClient';
+import { setServers } from 'dns';
 
 const logDebug = debug('leap:protocol:discovery');
 
@@ -23,9 +24,14 @@ type HostAndPort = {
 };
 
 export type SecretStorage = {
-    ca: string;
-    key: string;
-    cert: string;
+    // Cert-based
+    ca: string | undefined;
+    key: string | undefined;
+    cert: string | undefined;
+
+    // Password-based
+    username: string | undefined;
+    password: string | undefined;
 };
 
 export class BridgeFinder extends (EventEmitter as new () => TypedEmitter<BridgeFinderEvents>) {
@@ -178,26 +184,49 @@ export class BridgeFinder extends (EventEmitter as new () => TypedEmitter<Bridge
     }
 
     private async handleDiscovery(svc: MDNSService): Promise<SmartBridge> {
-        if (svc.data.get('systype') !== 'SmartBridge') {
-            logDebug('invalid responder was', svc);
-            throw new Error('invalid responder to discovery request');
+        if (svc.data.get('systype') === 'SmartBridge') {
+            // return a SmartBridge
+        } else if (svc.data.get('systype') === 'HWQSProcessor') {
+            // return a HWQSProcessor
+        } else {
+            // throw an error
+            logDebug('unknown system type', svc.data.get('systype'));
+            throw new Error('unknown system type');
         }
 
         const ipaddr = this.extractIp(svc.addresses);
-        logDebug('got useful ipaddr', ipaddr);
-
-        if (!ipaddr) {
+        if (ipaddr) {
+            logDebug('got useful ipaddr', ipaddr);
+        } else {
             logDebug('thing without useful address:', svc);
             throw new Error('could not get a useful address');
         }
 
-        const bridgeID = await this.extractBridgeFromIP(ipaddr);
-        logDebug('extracted bridge ID:', bridgeID);
+        let bridgeID = svc.data.get('sernum');
+        if (typeof bridgeID != 'string') {
+            // Fall back to the old method if we don't have a serial number
+            bridgeID = await this.extractBridgeFromIP(ipaddr);
+        }
+        logDebug('found bridge id:', bridgeID);
 
         if (this.secrets.has(bridgeID)) {
             const these = this.secrets.get(bridgeID)!;
-            const client = new LeapClient(ipaddr, LEAP_PORT, these.ca, these.key, these.cert);
+            let client: LeapClient;
+            if (these.ca!) {
+                logDebug('using cert-based (caseta) auth');
+                client = new LeapClient(ipaddr, LEAP_PORT, these.ca!, these.key!, these.cert!);
+            } else {
+                logDebug('using username/password auth');
+                client = new LeapClient(ipaddr, LEAP_PORT, undefined, undefined, undefined);
+            }
             await client.connect();
+            await client.request("UpdateRequest", "/login", {
+                "Login": {
+                    "ContextType": "Application",
+                    "LoginID": these.username!,
+                    "Password": these.password!
+                }
+            });
             return new SmartBridge(bridgeID, client);
         } else {
             throw new Error('no credentials for bridge ID ' + bridgeID);
